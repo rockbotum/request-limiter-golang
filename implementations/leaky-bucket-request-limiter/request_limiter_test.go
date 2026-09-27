@@ -345,6 +345,28 @@ func TestLeakyBucketWaitTimesOutWhenTheBucketStaysFull(t *testing.T) {
 	atMost(t, elapsed, 500*time.Millisecond, "wait on a bucket that stays full")
 }
 
+func TestLeakyBucketWaitKeepsItsSlotWhenTheContextExpires(t *testing.T) {
+	// A leak period of a second keeps the ticker far away from the deadline, so
+	// this request is queued and only the deadline can release it.
+	_, l := newLimiter(t, testLimit, 4*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	began := time.Now()
+	err := l.Wait(ctx)
+	elapsed := time.Since(began)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Wait error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	atMost(t, elapsed, 500*time.Millisecond, "wait on a queue that is not leaking soon")
+
+	// The request gave up, but its entry is still in line: handing the slot back
+	// early would let one more request into the bucket than the capacity allows.
+	limitertest.EqualInt(t, l.Len(), 1, "queued after a wait that timed out")
+}
+
 func TestLeakyBucketWaitQueuesBehindARequestThatIsNotCollected(t *testing.T) {
 	_, l := newLimiter(t, testLimit, testInterval)
 
