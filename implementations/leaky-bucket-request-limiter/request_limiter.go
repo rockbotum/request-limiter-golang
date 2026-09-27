@@ -7,7 +7,8 @@ import (
 )
 
 type LeakyBucketLimiter struct {
-	leakyBucketCh chan struct{}
+	queue    chan chan struct{}
+	interval time.Duration
 }
 
 func NewLeakyBucketLimiter(ctx context.Context, limit int, interval time.Duration) *LeakyBucketLimiter {
@@ -18,16 +19,17 @@ func NewLeakyBucketLimiter(ctx context.Context, limit int, interval time.Duratio
 		panic(fmt.Sprintf("leaky bucket: interval must be positive, got %s", interval))
 	}
 
+	leakEvery := time.Duration(interval.Nanoseconds() / int64(limit))
+	if leakEvery <= 0 {
+		panic(fmt.Sprintf("leaky bucket: interval %s is too small for limit %d: the leak period rounds down to zero", interval, limit))
+	}
+
 	limiter := &LeakyBucketLimiter{
-		leakyBucketCh: make(chan struct{}, limit),
+		queue:    make(chan chan struct{}, limit),
+		interval: leakEvery,
 	}
 
-	for i := 0; i < limit; i++ {
-		limiter.leakyBucketCh <- struct{}{}
-	}
-
-	replenishmentInterval := interval.Nanoseconds() / int64(limit)
-	go limiter.Start(ctx, time.Duration(replenishmentInterval))
+	go limiter.Start(ctx, leakEvery)
 	return limiter
 }
 
@@ -41,7 +43,8 @@ func (l *LeakyBucketLimiter) Start(ctx context.Context, interval time.Duration) 
 			return
 		case <-timer.C:
 			select {
-			case l.leakyBucketCh <- struct{}{}:
+			case ready := <-l.queue:
+				close(ready)
 			default:
 			}
 		}
@@ -50,9 +53,30 @@ func (l *LeakyBucketLimiter) Start(ctx context.Context, interval time.Duration) 
 
 func (l *LeakyBucketLimiter) Allow() bool {
 	select {
-	case <-l.leakyBucketCh:
+	case l.queue <- make(chan struct{}):
 		return true
 	default:
 		return false
 	}
+}
+
+func (l *LeakyBucketLimiter) Wait(ctx context.Context) error {
+	ready := make(chan struct{})
+
+	select {
+	case l.queue <- ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l *LeakyBucketLimiter) Len() int {
+	return len(l.queue)
 }
