@@ -10,7 +10,7 @@ NewXxxLimiter(ctx context.Context, limit int, interval time.Duration) *XxxLimite
 func (l *XxxLimiter) Allow() bool
 ```
 
-`limit` — сколько запросов разрешено за `interval`, `Allow` неблокирующий:
+`limit` - сколько запросов разрешено за `interval`, `Allow` неблокирующий:
 возвращает `false`, если запрос не проходит.
 
 ## Быстрый старт
